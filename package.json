@@ -1,27 +1,908 @@
+// frontend/package.json (completed)
 {
-  "name": "tutornft-dapp",
-  "version": "1.0.0",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "name": "tutornft-frontend",
+  "version": "0.1.0",
+  "private": true,
   "dependencies": {
-    "ethers": "^6.14.3",
-    "lucide-react": "^0.511.0",
-    "next": "^15.3.2",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "web3": "^4.16.0"
+    "@testing-library/jest-dom": "^5.16.4",
+    "@testing-library/react": "^13.3.0",
+    "@testing-library/user-event": "^13.5.0",
+    "ethers": "^6.7.1",
+    "lucide-react": "^0.263.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1",
+    "web-vitals": "^2.1.4"
   },
-  "devDependencies": {
-    "autoprefixer": "^10.4.21",
-    "eslint": "^9.27.0",
-    "eslint-config-next": "^15.3.2",
-    "postcss": "^8.5.4",
-    "tailwindcss": "^4.1.8"
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
   }
 }
+
+// contracts/TutorNFT.sol
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+contract TutorNFT is ERC721, ERC721URIStorage, Ownable, ReentrancyGuard {
+    using Counters for Counters.Counter;
+    
+    Counters.Counter private _tokenIdCounter;
+    
+    struct TutorProfile {
+        string name;
+        string subject;
+        string bio;
+        uint256 hourlyRate;
+        uint256 totalSessions;
+        uint256 rating;
+        uint256 ratingCount;
+        bool isActive;
+        address tutorAddress;
+    }
+    
+    struct Session {
+        uint256 tutorTokenId;
+        address student;
+        uint256 duration;
+        uint256 payment;
+        uint256 timestamp;
+        bool completed;
+        uint8 rating;
+    }
+    
+    mapping(uint256 => TutorProfile) public tutorProfiles;
+    mapping(uint256 => Session[]) public tutorSessions;
+    mapping(address => uint256[]) public tutorsByAddress;
+    
+    uint256[] public activeTutorIds;
+    
+    event TutorRegistered(uint256 indexed tokenId, address indexed tutor, string name, string subject);
+    event SessionBooked(uint256 indexed tutorTokenId, address indexed student, uint256 duration, uint256 payment);
+    event SessionCompleted(uint256 indexed tutorTokenId, address indexed student, uint8 rating);
+    event TutorRated(uint256 indexed tutorTokenId, uint256 newRating, uint256 ratingCount);
+    
+    constructor() ERC721("TutorNFT", "TNFT") {}
+    
+    function registerTutor(
+        string memory name,
+        string memory subject,
+        string memory bio,
+        uint256 hourlyRate,
+        string memory tokenURI
+    ) public returns (uint256) {
+        uint256 tokenId = _tokenIdCounter.current();
+        _tokenIdCounter.increment();
+        
+        _safeMint(msg.sender, tokenId);
+        _setTokenURI(tokenId, tokenURI);
+        
+        tutorProfiles[tokenId] = TutorProfile({
+            name: name,
+            subject: subject,
+            bio: bio,
+            hourlyRate: hourlyRate,
+            totalSessions: 0,
+            rating: 0,
+            ratingCount: 0,
+            isActive: true,
+            tutorAddress: msg.sender
+        });
+        
+        tutorsByAddress[msg.sender].push(tokenId);
+        activeTutorIds.push(tokenId);
+        
+        emit TutorRegistered(tokenId, msg.sender, name, subject);
+        return tokenId;
+    }
+    
+    function bookSession(uint256 tutorTokenId, uint256 duration) public payable nonReentrant {
+        require(_exists(tutorTokenId), "Tutor does not exist");
+        require(tutorProfiles[tutorTokenId].isActive, "Tutor is not active");
+        
+        uint256 requiredPayment = tutorProfiles[tutorTokenId].hourlyRate * duration / 3600;
+        require(msg.value >= requiredPayment, "Insufficient payment");
+        
+        Session memory newSession = Session({
+            tutorTokenId: tutorTokenId,
+            student: msg.sender,
+            duration: duration,
+            payment: msg.value,
+            timestamp: block.timestamp,
+            completed: false,
+            rating: 0
+        });
+        
+        tutorSessions[tutorTokenId].push(newSession);
+        
+        emit SessionBooked(tutorTokenId, msg.sender, duration, msg.value);
+    }
+    
+    function completeSession(uint256 tutorTokenId, uint256 sessionIndex, uint8 rating) public {
+        require(sessionIndex < tutorSessions[tutorTokenId].length, "Invalid session index");
+        Session storage session = tutorSessions[tutorTokenId][sessionIndex];
+        require(session.student == msg.sender, "Not your session");
+        require(!session.completed, "Session already completed");
+        require(rating >= 1 && rating <= 5, "Rating must be between 1 and 5");
+        
+        session.completed = true;
+        session.rating = rating;
+        
+        // Update tutor stats
+        TutorProfile storage tutor = tutorProfiles[tutorTokenId];
+        tutor.totalSessions++;
+        tutor.rating = (tutor.rating * tutor.ratingCount + rating) / (tutor.ratingCount + 1);
+        tutor.ratingCount++;
+        
+        // Transfer payment to tutor (minus platform fee)
+        uint256 platformFee = session.payment * 5 / 100; // 5% platform fee
+        uint256 tutorPayment = session.payment - platformFee;
+        
+        payable(tutor.tutorAddress).transfer(tutorPayment);
+        
+        emit SessionCompleted(tutorTokenId, msg.sender, rating);
+        emit TutorRated(tutorTokenId, tutor.rating, tutor.ratingCount);
+    }
+    
+    function updateTutorProfile(
+        uint256 tokenId,
+        string memory bio,
+        uint256 hourlyRate,
+        bool isActive
+    ) public {
+        require(ownerOf(tokenId) == msg.sender, "Not the owner of this tutor NFT");
+        
+        TutorProfile storage tutor = tutorProfiles[tokenId];
+        tutor.bio = bio;
+        tutor.hourlyRate = hourlyRate;
+        tutor.isActive = isActive;
+    }
+    
+    function getTutorProfile(uint256 tokenId) public view returns (TutorProfile memory) {
+        require(_exists(tokenId), "Tutor does not exist");
+        return tutorProfiles[tokenId];
+    }
+    
+    function getTutorSessions(uint256 tokenId) public view returns (Session[] memory) {
+        return tutorSessions[tokenId];
+    }
+    
+    function getActiveTutors() public view returns (uint256[] memory) {
+        uint256[] memory active = new uint256[](activeTutorIds.length);
+        uint256 count = 0;
+        
+        for (uint256 i = 0; i < activeTutorIds.length; i++) {
+            if (tutorProfiles[activeTutorIds[i]].isActive) {
+                active[count] = activeTutorIds[i];
+                count++;
+            }
+        }
+        
+        // Resize array to actual count
+        uint256[] memory result = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            result[i] = active[i];
+        }
+        
+        return result;
+    }
+    
+    function getTutorsByAddress(address tutorAddress) public view returns (uint256[] memory) {
+        return tutorsByAddress[tutorAddress];
+    }
+    
+    function withdrawPlatformFees() public onlyOwner {
+        payable(owner()).transfer(address(this).balance);
+    }
+    
+    // Override required functions
+    function _burn(uint256 tokenId) internal override(ERC721, ERC721URIStorage) {
+        super._burn(tokenId);
+    }
+    
+    function tokenURI(uint256 tokenId) public view override(ERC721, ERC721URIStorage) returns (string memory) {
+        return super.tokenURI(tokenId);
+    }
+    
+    function supportsInterface(bytes4 interfaceId) public view override(ERC721, ERC721URIStorage) returns (bool) {
+        return super.supportsInterface(interfaceId);
+    }
+}
+
+// frontend/src/App.js
+import React, { useState, useEffect } from 'react';
+import { ethers } from 'ethers';
+import { User, BookOpen, Star, Clock, DollarSign } from 'lucide-react';
+import './App.css';
+
+const CONTRACT_ADDRESS = process.env.REACT_APP_CONTRACT_ADDRESS || '';
+const NETWORK_ID = process.env.REACT_APP_NETWORK_ID || '1116';
+
+// ABI excerpt - you would include the full ABI here
+const CONTRACT_ABI = [
+  "function registerTutor(string memory name, string memory subject, string memory bio, uint256 hourlyRate, string memory tokenURI) public returns (uint256)",
+  "function bookSession(uint256 tutorTokenId, uint256 duration) public payable",
+  "function completeSession(uint256 tutorTokenId, uint256 sessionIndex, uint8 rating) public",
+  "function getTutorProfile(uint256 tokenId) public view returns (tuple(string name, string subject, string bio, uint256 hourlyRate, uint256 totalSessions, uint256 rating, uint256 ratingCount, bool isActive, address tutorAddress))",
+  "function getActiveTutors() public view returns (uint256[])",
+  "function getTutorsByAddress(address tutorAddress) public view returns (uint256[])",
+  "event TutorRegistered(uint256 indexed tokenId, address indexed tutor, string name, string subject)",
+  "event SessionBooked(uint256 indexed tutorTokenId, address indexed student, uint256 duration, uint256 payment)"
+];
+
+function App() {
+  const [account, setAccount] = useState('');
+  const [contract, setContract] = useState(null);
+  const [tutors, setTutors] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('browse');
+
+  useEffect(() => {
+    checkWalletConnection();
+  }, []);
+
+  const checkWalletConnection = async () => {
+    if (window.ethereum) {
+      try {
+        const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+        if (accounts.length > 0) {
+          setAccount(accounts[0]);
+          initializeContract();
+        }
+      } catch (error) {
+        console.error('Error checking wallet connection:', error);
+      }
+    }
+  };
+
+  const connectWallet = async () => {
+    if (window.ethereum) {
+      try {
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        setAccount(accounts[0]);
+        initializeContract();
+      } catch (error) {
+        console.error('Error connecting wallet:', error);
+      }
+    } else {
+      alert('Please install MetaMask to use this DApp');
+    }
+  };
+
+  const initializeContract = async () => {
+    if (window.ethereum && CONTRACT_ADDRESS) {
+      try {
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const signer = await provider.getSigner();
+        const contractInstance = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+        setContract(contractInstance);
+        loadTutors(contractInstance);
+      } catch (error) {
+        console.error('Error initializing contract:', error);
+      }
+    }
+  };
+
+  const loadTutors = async (contractInstance) => {
+    try {
+      setLoading(true);
+      const tutorIds = await contractInstance.getActiveTutors();
+      const tutorProfiles = [];
+
+      for (const id of tutorIds) {
+        try {
+          const profile = await contractInstance.getTutorProfile(id);
+          tutorProfiles.push({
+            id: id.toString(),
+            ...profile
+          });
+        } catch (error) {
+          console.error(`Error loading tutor ${id}:`, error);
+        }
+      }
+
+      setTutors(tutorProfiles);
+    } catch (error) {
+      console.error('Error loading tutors:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const registerTutor = async (formData) => {
+    if (!contract) return;
+
+    try {
+      setLoading(true);
+      const tx = await contract.registerTutor(
+        formData.name,
+        formData.subject,
+        formData.bio,
+        ethers.parseEther(formData.hourlyRate),
+        formData.tokenURI || ''
+      );
+      await tx.wait();
+      alert('Tutor registered successfully!');
+      loadTutors(contract);
+    } catch (error) {
+      console.error('Error registering tutor:', error);
+      alert('Error registering tutor: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const bookSession = async (tutorId, duration, payment) => {
+    if (!contract) return;
+
+    try {
+      setLoading(true);
+      const tx = await contract.bookSession(tutorId, duration, {
+        value: ethers.parseEther(payment)
+      });
+      await tx.wait();
+      alert('Session booked successfully!');
+    } catch (error) {
+      console.error('Error booking session:', error);
+      alert('Error booking session: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="App">
+      <header className="app-header">
+        <h1><BookOpen /> TutorNFT</h1>
+        <div className="header-actions">
+          {account ? (
+            <div className="wallet-info">
+              <User size={16} />
+              <span>{account.slice(0, 6)}...{account.slice(-4)}</span>
+            </div>
+          ) : (
+            <button onClick={connectWallet} className="connect-btn">
+              Connect Wallet
+            </button>
+          )}
+        </div>
+      </header>
+
+      <nav className="tab-nav">
+        <button 
+          className={activeTab === 'browse' ? 'active' : ''}
+          onClick={() => setActiveTab('browse')}
+        >
+          Browse Tutors
+        </button>
+        <button 
+          className={activeTab === 'register' ? 'active' : ''}
+          onClick={() => setActiveTab('register')}
+        >
+          Become a Tutor
+        </button>
+      </nav>
+
+      <main className="main-content">
+        {activeTab === 'browse' && (
+          <TutorBrowser 
+            tutors={tutors} 
+            loading={loading} 
+            onBookSession={bookSession}
+          />
+        )}
+        {activeTab === 'register' && (
+          <TutorRegistration 
+            onRegister={registerTutor}
+            loading={loading}
+          />
+        )}
+      </main>
+    </div>
+  );
+}
+
+function TutorBrowser({ tutors, loading, onBookSession }) {
+  if (loading) {
+    return <div className="loading">Loading tutors...</div>;
+  }
+
+  return (
+    <div className="tutor-grid">
+      {tutors.map(tutor => (
+        <TutorCard 
+          key={tutor.id}
+          tutor={tutor}
+          onBookSession={onBookSession}
+        />
+      ))}
+      {tutors.length === 0 && (
+        <div className="no-tutors">No tutors available yet.</div>
+      )}
+    </div>
+  );
+}
+
+function TutorCard({ tutor, onBookSession }) {
+  const [showBooking, setShowBooking] = useState(false);
+  const [duration, setDuration] = useState('3600'); // 1 hour in seconds
+
+  const handleBook = () => {
+    const payment = (parseFloat(ethers.formatEther(tutor.hourlyRate)) * parseInt(duration) / 3600).toString();
+    onBookSession(tutor.id, duration, payment);
+    setShowBooking(false);
+  };
+
+  return (
+    <div className="tutor-card">
+      <div className="tutor-header">
+        <h3>{tutor.name}</h3>
+        <div className="rating">
+          <Star size={16} />
+          <span>{tutor.ratingCount > 0 ? (tutor.rating / 100).toFixed(1) : 'New'}</span>
+        </div>
+      </div>
+      
+      <div className="tutor-info">
+        <p className="subject">{tutor.subject}</p>
+        <p className="bio">{tutor.bio}</p>
+        
+        <div className="tutor-stats">
+          <div className="stat">
+            <Clock size={14} />
+            <span>{tutor.totalSessions.toString()} sessions</span>
+          </div>
+          <div className="stat">
+            <DollarSign size={14} />
+            <span>{ethers.formatEther(tutor.hourlyRate)} CORE/hour</span>
+          </div>
+        </div>
+      </div>
+
+      {!showBooking ? (
+        <button onClick={() => setShowBooking(true)} className="book-btn">
+          Book Session
+        </button>
+      ) : (
+        <div className="booking-form">
+          <select 
+            value={duration} 
+            onChange={(e) => setDuration(e.target.value)}
+            className="duration-select"
+          >
+            <option value="1800">30 minutes</option>
+            <option value="3600">1 hour</option>
+            <option value="7200">2 hours</option>
+          </select>
+          <div className="booking-actions">
+            <button onClick={handleBook} className="confirm-btn">Confirm</button>
+            <button onClick={() => setShowBooking(false)} className="cancel-btn">Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TutorRegistration({ onRegister, loading }) {
+  const [formData, setFormData] = useState({
+    name: '',
+    subject: '',
+    bio: '',
+    hourlyRate: '',
+    tokenURI: ''
+  });
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (formData.name && formData.subject && formData.bio && formData.hourlyRate) {
+      onRegister(formData);
+    } else {
+      alert('Please fill in all required fields');
+    }
+  };
+
+  return (
+    <div className="registration-form">
+      <h2>Become a Tutor</h2>
+      <form onSubmit={handleSubmit}>
+        <input
+          type="text"
+          placeholder="Your Name *"
+          value={formData.name}
+          onChange={(e) => setFormData({...formData, name: e.target.value})}
+          required
+        />
+        
+        <input
+          type="text"
+          placeholder="Subject/Expertise *"
+          value={formData.subject}
+          onChange={(e) => setFormData({...formData, subject: e.target.value})}
+          required
+        />
+        
+        <textarea
+          placeholder="Tell students about yourself *"
+          value={formData.bio}
+          onChange={(e) => setFormData({...formData, bio: e.target.value})}
+          required
+        />
+        
+        <input
+          type="number"
+          step="0.01"
+          placeholder="Hourly Rate (CORE) *"
+          value={formData.hourlyRate}
+          onChange={(e) => setFormData({...formData, hourlyRate: e.target.value})}
+          required
+        />
+        
+        <input
+          type="url"
+          placeholder="Profile Image URL (optional)"
+          value={formData.tokenURI}
+          onChange={(e) => setFormData({...formData, tokenURI: e.target.value})}
+        />
+        
+        <button type="submit" disabled={loading} className="register-btn">
+          {loading ? 'Registering...' : 'Register as Tutor'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+export default App;
+
+// frontend/src/App.css
+.App {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-family: 'Arial', sans-serif;
+}
+
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.app-header h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 1.8rem;
+}
+
+.wallet-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(255, 255, 255, 0.2);
+  padding: 0.5rem 1rem;
+  border-radius: 25px;
+}
+
+.connect-btn {
+  background: #4CAF50;
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 25px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: background 0.3s;
+}
+
+.connect-btn:hover {
+  background: #45a049;
+}
+
+.tab-nav {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tab-nav button {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  padding: 0.75rem 1.5rem;
+  border-radius: 25px;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.tab-nav button:hover,
+.tab-nav button.active {
+  color: white;
+  border-color: white;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.main-content {
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.tutor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+.tutor-card {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 15px;
+  padding: 1.5rem;
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+
+.tutor-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.tutor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.tutor-header h3 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.rating {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: #FFD700;
+}
+
+.subject {
+  font-weight: bold;
+  color: #4CAF50;
+  margin: 0.5rem 0;
+}
+
+.bio {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 0.9rem;
+  margin: 0.5rem 0 1rem;
+  line-height: 1.4;
+}
+
+.tutor-stats {
+  display: flex;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.book-btn, .register-btn {
+  width: 100%;
+  background: linear-gradient(45deg, #4CAF50, #45a049);
+  color: white;
+  border: none;
+  padding: 0.75rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: transform 0.3s;
+}
+
+.book-btn:hover, .register-btn:hover {
+  transform: scale(1.05);
+}
+
+.booking-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.duration-select {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  padding: 0.5rem;
+  border-radius: 5px;
+}
+
+.booking-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.confirm-btn {
+  flex: 1;
+  background: #4CAF50;
+  color: white;
+  border: none;
+  padding: 0.5rem;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.cancel-btn {
+  flex: 1;
+  background: #f44336;
+  color: white;
+  border: none;
+  padding: 0.5rem;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.registration-form {
+  max-width: 500px;
+  margin: 0 auto;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 15px;
+  padding: 2rem;
+}
+
+.registration-form h2 {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.registration-form input,
+.registration-form textarea {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  padding: 0.75rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-size: 1rem;
+}
+
+.registration-form input::placeholder,
+.registration-form textarea::placeholder {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.registration-form textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+
+.loading, .no-tutors {
+  text-align: center;
+  padding: 3rem;
+  font-size: 1.2rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+@media (max-width: 768px) {
+  .app-header {
+    padding: 1rem;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  
+  .main-content {
+    padding: 1rem;
+  }
+  
+  .tutor-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .tab-nav {
+    flex-direction: column;
+    align-items: center;
+  }
+}
+
+// frontend/src/index.js
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import './index.css';
+import App from './App';
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+
+// frontend/src/index.css
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+// frontend/public/index.html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta
+      name="description"
+      content="TutorNFT - NFT-based online tutoring platform on Core DAO"
+    />
+    <title>TutorNFT - Decentralized Tutoring Platform</title>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>
+
+// test/TutorNFT.test.js
+const { expect } = require("chai");
+const { ethers } = require("hardhat");
+
+describe("Tut
