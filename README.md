@@ -31,19 +31,23 @@ TutorNFT is a groundbreaking blockchain-powered online tutoring platform built o
 ## 📸 Screenshots
 
 ### 🏠 Homepage - Browse Available Tutors
-![Homepage](image1_homepage.png)
+![Screenshot (48)](https://github.com/user-attachments/assets/69d10a4c-a3ab-4f7b-9802-14cf52694700)
+
 *Clean, modern interface showing available tutors and navigation*
 
 ### 📝 Tutor Registration Form
-![Registration Form](image2_registration.png)
+![Screenshot (49)](https://github.com/user-attachments/assets/e9efbebb-8d37-4e8d-8e83-a8b3216fe9da)
+
 *Simple form for tutors to register their profiles and set hourly rates*
 
 ### 🔗 Wallet Connection
-![Wallet Connection](image3_wallet_connected.png)
+![Screenshot (50)](https://github.com/user-attachments/assets/d6852b96-5b27-4ea1-a98f-5ac34617daf0)
+
 *Seamless MetaMask wallet integration for secure transactions*
 
 ### 🦊 MetaMask Integration
-![MetaMask](image4_metamask.png)
+![Screenshot (53)](https://github.com/user-attachments/assets/3c87e88c-a1b7-4eae-9177-6d0d5a817463)
+
 *Connect your wallet to access all platform features*
 
 ## 🏗️ Architecture
